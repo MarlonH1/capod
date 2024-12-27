@@ -152,4 +152,6 @@ dependencies {
 
     "gplayImplementation"("com.android.billingclient:billing:6.0.1")
     "gplayImplementation"("com.android.billingclient:billing-ktx:6.0.1")
+    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
+    implementation("androidx.mediarouter:mediarouter:1.7.0")
 }

@@ -13,7 +13,7 @@ import java.util.*
 object ProjectConfig {
     const val packageName = "eu.darken.capod"
 
-    const val minSdk = 26
+    const val minSdk = 34
     const val compileSdk = 34
     const val targetSdk = 34
 

@@ -73,20 +73,27 @@ class PlayPause @Inject constructor(
                 }
             }
 
-            if (previousWorn == false && currentWorn == true && !mediaControl.isPlaying) {
-                if (reactionSettings.autoPlay.value) {
-                    log(TAG) { "autoPlay is triggered, sendPlay()" }
-                    mediaControl.sendPlay()
-                } else {
-                    log(TAG, VERBOSE) { "autoPlay is disabled" }
+            if(previousWorn == false && currentWorn == true) {
+                podMonitor.onPlaybackChanged()
+                if(!mediaControl.isPlaying) {
+                    if (reactionSettings.autoPlay.value) {
+                        log(TAG) { "autoPlay is triggered, sendPlay()" }
+                        mediaControl.sendPlay()
+                    } else {
+                        log(TAG, VERBOSE) { "autoPlay is disabled" }
+                    }
+
                 }
-            } else if (previousWorn == true && currentWorn == false && mediaControl.isPlaying) {
-                if (reactionSettings.autoPause.value) {
-                    log(TAG) { "autoPause is triggered, sendPause()" }
-                    mediaControl.sendPause()
-                } else {
-                    log(TAG) { "autoPause is disabled" }
+            } else if (previousWorn == true && currentWorn == false) {
+                if(mediaControl.isPlaying) {
+                    if (reactionSettings.autoPause.value) {
+                        log(TAG) { "autoPause is triggered, sendPause()" }
+                        mediaControl.sendPause()
+                    } else {
+                        log(TAG) { "autoPause is disabled" }
+                    }
                 }
+                podMonitor.onPlaybackChanged()
             }
         }
         .setupCommonEventHandlers(TAG) { "monitor" }

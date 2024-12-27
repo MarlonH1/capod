@@ -93,6 +93,7 @@ dependencies {
     addMoshi()
     addBaseWorkManager()
     addNavigation()
+    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
 
     addTesting()
 

@@ -1,6 +1,11 @@
 package eu.darken.capod.monitor.core
 
+import android.annotation.SuppressLint
 import android.bluetooth.le.ScanFilter
+import android.media.AudioDeviceInfo
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.provider.MediaStore.Audio
 import eu.darken.capod.common.bluetooth.BleScanResult
 import eu.darken.capod.common.bluetooth.BleScanner
 import eu.darken.capod.common.bluetooth.BluetoothManager2
@@ -17,19 +22,24 @@ import eu.darken.capod.common.flow.setupCommonEventHandlers
 import eu.darken.capod.common.flow.throttleLatest
 import eu.darken.capod.main.core.GeneralSettings
 import eu.darken.capod.main.core.PermissionTool
+import eu.darken.capod.pods.core.HasEarDetection
 import eu.darken.capod.pods.core.PodDevice
 import eu.darken.capod.pods.core.PodFactory
+import eu.darken.capod.pods.core.apple.airpods.AirPodsMax
 import eu.darken.capod.pods.core.apple.protocol.ProximityPairing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.lsposed.hiddenapibypass.HiddenApiBypass
+import java.lang.reflect.Method
 import java.time.Duration
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
 
+@SuppressLint("PrivateApi")
 @Singleton
 class PodMonitor @Inject constructor(
     @AppScope private val appScope: CoroutineScope,
@@ -40,10 +50,55 @@ class PodMonitor @Inject constructor(
     private val debugSettings: DebugSettings,
     private val podDeviceCache: PodDeviceCache,
     private val permissionTool: PermissionTool,
-) {
+    private val audioManager: AudioManager,
+    ) {
 
     private val deviceCache = mutableMapOf<PodDevice.Id, PodDevice>()
     private val cacheLock = Mutex()
+    private val getAudioProductStrategiesMethod: Method by lazy {
+        HiddenApiBypass
+            .getDeclaredMethod(
+                Class.forName(
+                "android.media.audiopolicy.AudioProductStrategy"),
+                    "getAudioProductStrategies"
+            )
+    }
+    private val setPreferredDeviceMethod: Method by lazy {
+        HiddenApiBypass.getDeclaredMethod(
+            AudioManager::class.java,
+            "setPreferredDeviceForStrategy",
+            Class.forName("android.media.audiopolicy.AudioProductStrategy"),
+            Class.forName("android.media.AudioDeviceAttributes")
+        )
+    }
+    private val getPreferredDeviceMethod: Method by lazy {
+        HiddenApiBypass.getDeclaredMethod(
+            AudioManager::class.java,
+            "getPreferredDeviceForStrategy",
+            Class.forName("android.media.audiopolicy.AudioProductStrategy"),
+        )
+    }
+
+
+    private fun mediaStrategy(): Any {
+       return (getAudioProductStrategiesMethod.invoke(audioManager) as List<*>)[5]!!
+    }
+
+    private fun getAudioProductAttributes(switchDevicesArgument: SwitchDevicesArgument): Any {
+        val type = when(switchDevicesArgument) {
+            SwitchDevicesArgument.SPEAKER -> AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+            SwitchDevicesArgument.HEADPHONE -> AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+        }
+        val devices = audioManager
+            .getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            .first { it.type == type }
+
+        return HiddenApiBypass.newInstance(Class.forName("android.media.AudioDeviceAttributes"), devices)
+    }
+
+    private fun setPreferredDevice(audioStrategy: Any, audioProductAttributes: Any) {
+        setPreferredDeviceMethod.invoke(audioManager, audioStrategy, audioProductAttributes)
+    }
 
     val devices: Flow<List<PodDevice>> = combine(
         permissionTool.missingPermissions,
@@ -212,6 +267,40 @@ class PodMonitor @Inject constructor(
         return currentMain ?: podDeviceCache.loadMainDevice()
             ?.let { podFactory.createPod(it)?.device }
             .also { log(TAG) { "Cached mainDevice is $it" } }
+    }
+
+    private fun isSpeakerPlaying(): Boolean {
+        val currentAudioDeviceAttributes = getPreferredDeviceMethod.invoke(audioManager, mediaStrategy()) ?: return true
+        val address = Class.forName(currentAudioDeviceAttributes::class.java.name).methods.first { it.name == "getAddress" }.invoke(currentAudioDeviceAttributes) as String
+
+        return address.isBlank()
+    }
+
+   private enum class SwitchDevicesArgument {
+        SPEAKER,
+        HEADPHONE
+    }
+
+    private fun switchTo(switchDevicesArgument: SwitchDevicesArgument) {
+        val mediaStrategy = mediaStrategy()
+        val attributes = getAudioProductAttributes(switchDevicesArgument)
+        setPreferredDevice(mediaStrategy, attributes)
+    }
+
+    private var ignoreAskToSwitchToHeadphone = false
+    private var ignoreAskToSwitchToSpeaker = false
+    suspend fun onPlaybackChanged() {
+        val device = latestMainDevice() as? AirPodsMax ?: return
+
+        if(device.isBeingWorn && isSpeakerPlaying() ) {
+            switchTo(SwitchDevicesArgument.HEADPHONE)
+            ignoreAskToSwitchToHeadphone = true
+            ignoreAskToSwitchToSpeaker = false
+        }  else if(!device.isBeingWorn && !isSpeakerPlaying()){
+            switchTo(SwitchDevicesArgument.SPEAKER)
+            ignoreAskToSwitchToSpeaker = true
+            ignoreAskToSwitchToHeadphone = false
+        }
     }
 
     companion object {
